@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Tower Rush: Elevator Overload</title>
+    <style>
+        /* ============================================================
+           RESET & BASE
+           ============================================================ */
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #0f0f1a;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #e0e0e0;
+            touch-action: manipulation;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        /* ============================================================
+           HUD – testa (monete + reputazione)
+           ============================================================ */
+        #hud {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 200;
+        }
+
+        .hud-top {
+            position: absolute;
+            top: env(safe-area-inset-top, 12px);
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            pointer-events: auto;
+            z-index: 210;
+        }
+
+        .hud-top h1 {
+            font-size: clamp(16px, 5vw, 22px);
+            color: #ffd700;
+            margin: 0;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+            letter-spacing: 1px;
+            text-align: center;
+        }
+
+        .stats {
+            display: flex;
+            gap: 28px;
+            margin-top: 2px;
+        }
+
+        .stat-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(4px);
+            padding: 6px 14px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+
+        .stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: #b0b0c0;
+            margin-bottom: 2px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-value.reputation { color: #ff6b6b; }
+        .stat-value.money { color: #ffd700; }
+
+        /* ============================================================
+           Pulsanti laterali piani (P0..P3)
+           ============================================================ */
+        .hud-side {
+            position: absolute;
+            top: 50%;
+            right: env(safe-area-inset-right, 14px);
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: auto;
+            z-index: 210;
+        }
+
+        .floor-btn {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            border: 2px solid rgba(74, 144, 226, 0.5);
+            background: rgba(30, 58, 95, 0.7);
+            backdrop-filter: blur(6px);
+            color: #e0e0e0;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            transition: all 0.18s;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .floor-btn .floor-label { font-size: 11px; opacity: 0.8; }
+        .floor-btn .floor-letter { font-size: 17px; }
+
+        .floor-btn:active { transform: scale(0.92); }
+
+        .floor-btn.active {
+            border-color: #ffd700;
+            background: #ffd700;
+            color: #1a1a2e;
+            box-shadow: 0 0 16px rgba(255, 215, 0, 0.5);
+        }
+
+        /* ============================================================
+           Game Over overlay
+           ============================================================ */
+        #gameover {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 10, 16, 0.88);
+            backdrop-filter: blur(8px);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            z-index: 400;
+            padding: 24px;
+        }
+
+        #gameover.visible { display: flex; }
+
+        #gameover h2 {
+            font-size: clamp(24px, 8vw, 36px);
+            color: #ff4444;
+            margin-bottom: 12px;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        }
+
+        #gameover .final-score {
+            font-size: 22px;
+            color: #ffd700;
+            margin-bottom: 8px;
+        }
+
+        #gameover .final-record {
+            font-size: 15px;
+            color: #b0b0c0;
+            margin-bottom: 24px;
+        }
+
+        .btn-primary {
+            padding: 14px 34px;
+            font-size: 17px;
+            font-weight: 700;
+            color: #1a1a2e;
+            background: #ffd700;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(255,215,0,0.35);
+            transition: transform 0.12s, background 0.2s;
+        }
+
+        .btn-primary:active { transform: scale(0.95); background: #e6c200; }
+
+        /* ============================================================
+           Testi flottanti (monete guadagnate)
+           ============================================================ */
+        .floating-text {
+            position: fixed;
+            pointer-events: none;
+            color: #ffd700;
+            font-size: 16px;
+            font-weight: 800;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+            z-index: 250;
+            animation: floatUp 1.2s ease-out forwards;
+        }
+
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-40px) scale(1.2); opacity: 0; }
+        }
+
+        /* ============================================================
+           Mobile safe areas
+           ============================================================ */
+        @media (max-width: 600px) {
+            .hud-top { top: env(safe-area-inset-top, 8px); }
+            .hud-side { right: env(safe-area-inset-right, 10px); }
+            .stats { gap: 20px; }
+            .stat-block { padding: 5px 12px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <!-- HUD -->
+    <div id="hud">
+        <div class="hud-top">
+            <h1>Tower Rush: Elevator Overload</h1>
+            <div class="stats">
+                <div class="stat-block">
+                    <div class="stat-label">Reputazione</div>
+                    <div class="stat-value reputation" id="reputation-value">❤❤❤</div>
+                </div>
+                <div class="stat-block">
+                    <div class="stat-label">Monete</div>
+                    <div class="stat-value money" id="money-value">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="hud-side">
+            <button class="floor-btn active" data-floor="0" id="btn-floor-0">
+                <span class="floor-letter">P</span><span class="floor-label">0</span>
+            </button>
+            <button class="floor-btn" data-floor="1" id="btn-floor-1">
+                <span class="floor-letter">P</span><span class="floor-label">1</span>
+            </button>
+            <button class="floor-btn" data-floor="2" id="btn-floor-2">
+                <span class="floor-letter">P</span><span class="floor-label">2</span>
+            </button>
+            <button class="floor-btn" data-floor="3" id="btn-floor-3">
+                <span class="floor-letter">P</span><span class="floor-label">3</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="floating-text" id="floating-text"></div>
+
+    <!-- Game Over -->
+    <div id="gameover">
+        <h2>GAME OVER</h2>
+        <div class="final-score" id="final-score">Monete: 0</div>
+        <div class="final-record" id="final-record">Record: 0</div>
+        <button class="btn-primary" id="restart-btn">RICOMINCIA</button>
+    </div>
+
+    <!-- Three.js r128 via CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.128.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        /* ============================================================
+           TOWER RUSH: ELEVATOR OVERLOAD – gioco completo in un file
+           Three.js r128 | HTML5 + CSS3 | localStorage | mobile-friendly
+           ============================================================ */
+
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // ------------------------------------------------------------------
+        // CONFIGURAZIONE DI GIOCO
+        // ------------------------------------------------------------------
+        const CONFIG = {
+            floorCount: 4,           // P0 .. P3
+            floorHeight: 6,          // altezza di ogni piano
+            buildingWidth: 10,
+            buildingDepth: 8,
+            elevatorCapacity: 4,     // capienza max passeggeri
+            elevatorSpeed: 6,        // unità al secondo
+            doorOpenTime: 900,       // ms porte aperte
+            spawnIntervalMin: 2500,  // ms min tra spawn
+            spawnIntervalMax: 5500,  // ms max tra spawn
+            basePatience: 25,        // secondi di pazienza base
+            coinPerPassenger: 15,    // monete per passeggero consegnato
+            initialHearts: 3,
+        };
+
+        const SAVE_KEY = 'tower-rush-save';
+        const RECORD_KEY = 'tower-rush-record';
+
+        // ------------------------------------------------------------------
+        // STATE DI GIOCO (con localStorage)
+        // ------------------------------------------------------------------
+        function loadSave() {
+            try {
+                const raw = localStorage.getItem(SAVE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (e) { console.warn('localStorage read error', e); }
+            return {
+                money: 0,
+                hearts: CONFIG.initialHearts,
+                record: parseInt(localStorage.getItem(RECORD_KEY) || '0', 10),
+            };
+        }
+
+        function saveSave(state) {
+            try {
+                localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+                localStorage.setItem(RECORD_KEY, Math.max(state.record || 0, state.money || 0).toString());
+            } catch (e) { console.warn('localStorage write error', e); }
+        }
+
+        let gameState = loadSave();
+
+        // ------------------------------------------------------------------
+        // THREE.JS SETUP
+        // ------------------------------------------------------------------
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f0f1a);
+        scene.fog = new THREE.Fog(0x0f0f1a, 20, 90);
+
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+        camera.position.set(16, 22, 22);
+        camera.lookAt(0, CONFIG.floorHeight * CONFIG.floorCount / 2, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.enablePan = false;
+        controls.enableZoom = false;
+        controls.enableRotate = false;
+        controls.target.set(0, CONFIG.floorHeight * CONFIG.floorCount / 2, 0);
+        controls.update();
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        const fillLight = new THREE.PointLight(0x4a90e2, 0.4);
+        fillLight.position.set(-10, 10, -10);
+        scene.add(fillLight);
+
+        // ------------------------------------------------------------------
+        // MATERIALI
+        // ------------------------------------------------------------------
+        const matWallOutside = new THREE.MeshStandardMaterial({ color: 0x3a3a5a, roughness: 0.7, metalness: 0.1 });
+        const matWallInside  = new THREE.MeshStandardMaterial({ color: 0x2b2b40, roughness: 0.8, metalness: 0.05 });
+        const matFloor       = new THREE.MeshStandardMaterial({ color: 0x444460, roughness: 0.9 });
+        const matFloorTop    = new THREE.MeshStandardMaterial({ color: 0x555577, roughness: 0.7 });
+        const matShaft       = new THREE.MeshStandardMaterial({ color: 0x222235, roughness: 0.9 });
+        const matElevator    = new THREE.MeshStandardMaterial({ color: 0x4a90e2, roughness: 0.3, metalness: 0.6 });
+        const matElevatorDoor= new THREE.MeshStandardMaterial({ color: 0x2d5a8a, roughness: 0.4 });
+        const matPassenger   = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.4 });
+        const matPatienceBg  = new THREE.MeshBasicMaterial({ color: 0x333333 });
+        const matPatienceFill= new THREE.MeshBasicMaterial({ color: 0xff4444 });
+
+        // ------------------------------------------------------------------
+        // COSTRUZIONE EDIFICIO (visione sezionata frontale, ascensore a destra)
+        // ------------------------------------------------------------------
+        const buildingGroup = new THREE.Group();
+        scene.add(buildingGroup);
+
+        const cy = CONFIG.floorHeight * CONFIG.floorCount / 2;
+        const shaftWidth = 3.4;
+        const shaftX = CONFIG.buildingWidth / 2 + 0.3 + shaftWidth / 2;
+
+        // Parete posteriore (intera)
+        const backWall = new THREE.Mesh(
+            new THREE.BoxGeometry(CONFIG.buildingWidth, CONFIG.floorHeight * CONFIG.floorCount, 0.6),
+            matWallOutside
+        );
+        backWall.position.set(0, cy, -CONFIG.buildingDepth / 2 - 0.3);
+        backWall.castShadow = true;
+        backWall.receiveShadow = true;
+        buildingGroup.add(backWall);
+
+        // Parete laterale sinistra
+        const leftWall = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, CONFIG.floorHeight * CONFIG.floorCount, CONFIG.buildingDepth),
+            matWallOutside
+        );
+        leftWall.position.set(-CONFIG.buildingWidth / 2 - 0.3, cy, 0);
+        leftWall.castShadow = true;
+        leftWall.receiveShadow = true;
+        buildingGroup.add(leftWall);
+
+        // Vano ascensore (gruppo a destra)
+        const shaftGroup = new THREE.Group();
+        shaftGroup.position.set(shaftX, cy, 0);
+        buildingGroup.add(shaftGroup);
+
+        // Pareti interne shaft
+        const shaftBack = new THREE.Mesh(
+            new THREE.BoxGeometry(shaftWidth, CONFIG.floorHeight * CONFIG.floorCount, 0.6),
+            matShaft
+        );
+        shaftBack.position.set(0, 0, -CONFIG.buildingDepth / 2 - 0.3);
+        shaftBack.receiveShadow = true;
+        shaftGroup.add(shaftBack);
+
+        const shaftLeft = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, CONFIG.floorHeight * CONFIG.floorCount, CONFIG.buildingDepth - 0.2),
+            matShaft
+        );
+        shaftLeft.position.set(-shaftWidth / 2 + 0.3, 0, 0);
+        shaftLeft.receiveShadow = true;
+        shaftGroup.add(shaftLeft);
+
+        const shaftRight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, CONFIG.floorHeight * CONFIG.floorCount, CONFIG.buildingDepth - 0.2),
+            matShaft
+        );
+        shaftRight.position.set(shaftWidth / 2 - 0.3, 0, 0);
+        shaftRight.receiveShadow = true;
+        shaftGroup.add(shaftRight);
+
+        // Soffitto shaft
+        const shaftCeil = new THREE.Mesh(
+            new THREE.BoxGeometry(shaftWidth, 0.6, CONFIG.buildingDepth - 0.2),
+            matShaft
+        );
+        shaftCeil.position.set(0, CONFIG.floorHeight * CONFIG.floorCount / 2 + 0.3, 0);
+        shaftGroup.add(shaftCeil);
+
+        // Etichette piani a destra dello shaft (canvas texture)
+        function makeFloorLabel(text) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, 64, 32);
+            ctx.fillStyle = '#ffd700';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 32, 16);
+            const tex = new THREE.CanvasTexture(canvas);
+            return new THREE.MeshBasicMaterial({ map: tex });
+        }
+
+        const floorLabels = ['P0', 'P1', 'P2', 'P3'];
+        floorLabels.forEach((label, i) => {
+            const lblMesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(2.2, 1.1),
+                makeFloorLabel(label)
+            );
+            lblMesh.position.set(shaftX + shaftWidth / 2 + 0.5, i * CONFIG.floorHeight + CONFIG.floorHeight / 2, 0.4);
+            lblMesh.lookAt(0, lblMesh.position.y, 0);
+            buildingGroup.add(lblMesh);
+        });
+
+        echo "Part 2 written. Lines: $(wc -l < /workspaces/elevator-madness/index.html)"
+
+        // ------------------------------------------------------------------
+        // ASCENSORE
+        // ------------------------------------------------------------------
+        const elevatorGroup = new THREE.Group();
+        shaftGroup.add(elevatorGroup);
+
+        const carWidth = shaftWidth - 1.2;
+        const carHeight = CONFIG.floorHeight - 1.0;
+        const carDepth = CONFIG.buildingDepth - 2.0;
+
+        const carBody = new THREE.Mesh(
+            new THREE.BoxGeometry(carWidth, carHeight, carDepth),
+            matElevator
+        );
+        carBody.castShadow = true;
+        carBody.receiveShadow = true;
+        elevatorGroup.add(carBody);
+
+        const doorLeft = new THREE.Mesh(
+            new THREE.BoxGeometry(carWidth / 2 - 0.15, carHeight, 0.15),
+            matElevatorDoor
+        );
+        doorLeft.position.set(-carWidth / 4, 0, carDepth / 2 + 0.08);
+        elevatorGroup.add(doorLeft);
+
+        const doorRight = new THREE.Mesh(
+            new THREE.BoxGeometry(carWidth / 2 - 0.15, carHeight, 0.15),
+            matElevatorDoor
+        );
+        doorRight.position.set(carWidth / 4, 0, carDepth / 2 + 0.08);
+        elevatorGroup.add(doorRight);
+
+        let elevatorState = {
+            currentFloor: 0,
+            targetFloor: 0,
+            isMoving: false,
+            doorOpen: false,
+            doorTimer: 0,
+            passengers: [],
+            y: 0,
+        };
+
+        function setElevatorTarget(floorIndex) {
+            if (elevatorState.isMoving) return;
+            if (floorIndex === elevatorState.currentFloor) {
+                if (!elevatorState.doorOpen) openDoors();
+                return;
+            }
+            elevatorState.targetFloor = floorIndex;
+            elevatorState.isMoving = true;
+            elevatorState.doorOpen = false;
+            closeDoors();
+        }
+
+        function openDoors() {
+            elevatorState.doorOpen = true;
+            elevatorState.doorTimer = CONFIG.doorOpenTime / 1000;
+        }
+
+        function closeDoors() {
+            elevatorState.doorOpen = false;
+        }
+
+        function updateElevator(dt) {
+            const targetY = elevatorState.targetFloor * CONFIG.floorHeight + CONFIG.floorHeight / 2;
+
+            if (elevatorState.isMoving) {
+                const diff = targetY - elevatorState.y;
+                const step = CONFIG.elevatorSpeed * dt;
+                if (Math.abs(diff) <= step) {
+                    elevatorState.y = targetY;
+                    elevatorState.isMoving = false;
+                    elevatorState.currentFloor = elevatorState.targetFloor;
+                    openDoors();
+                    onElevatorArrived();
+                } else {
+                    elevatorState.y += Math.sign(diff) * step;
+                }
+            }
+
+            if (elevatorState.doorOpen) {
+                elevatorState.doorTimer -= dt;
+                if (elevatorState.doorTimer <= 0) {
+                    elevatorState.doorOpen = false;
+                }
+            }
+
+            elevatorGroup.position.y = elevatorState.y - cy;
+
+            const doorOpenAmount = elevatorState.doorOpen ? 1 : 0;
+            const doorSlide = carWidth / 4 * doorOpenAmount;
+            doorLeft.position.x = -carWidth / 4 - doorSlide;
+            doorRight.position.x = carWidth / 4 + doorSlide;
+        }
+
+        // ------------------------------------------------------------------
+        // PASSEGGERI
+        // ------------------------------------------------------------------
+        const passengers = [];
+
+        function createPassengerMesh() {
+            const group = new THREE.Group();
+
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(0.7, 1.1, 0.4),
+                matPassenger
+            );
+            body.position.y = 0.55;
+            body.castShadow = true;
+            group.add(body);
+
+            const head = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 8, 8),
+                matPassenger
+            );
+            head.position.y = 1.3;
+            head.castShadow = true;
+            group.add(head);
+
+            const patienceBarGroup = new THREE.Group();
+            patienceBarGroup.position.y = 1.8;
+
+            const bg = new THREE.Mesh(
+                new THREE.BoxGeometry(0.9, 0.14, 0.05),
+                matPatienceBg
+            );
+            patienceBarGroup.add(bg);
+
+            const fill = new THREE.Mesh(
+                new THREE.BoxGeometry(0.88, 0.12, 0.06),
+                matPatienceFill
+            );
+            fill.position.x = -0.01;
+            patienceBarGroup.add(fill);
+
+            group.add(patienceBarGroup);
+
+            const destCanvas = document.createElement('canvas');
+            destCanvas.width = 32; destCanvas.height = 32;
+            const dctx = destCanvas.getContext('2d');
+            dctx.fillStyle = '#1a1a2e';
+            dctx.fillRect(0, 0, 32, 32);
+            dctx.fillStyle = '#4a90e2';
+            dctx.font = 'bold 18px sans-serif';
+            dctx.textAlign = 'center';
+            dctx.textBaseline = 'middle';
+            dctx.fillText('?', 16, 16);
+            const destTex = new THREE.CanvasTexture(destCanvas);
+            const destMat = new THREE.MeshBasicMaterial({ map: destTex, transparent: true });
+            const destPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), destMat);
+            destPlane.position.y = 2.25;
+            group.add(destPlane);
+
+            return { group, body, head, patienceFill: fill, destMat, destPlane, destCanvas, dctx };
+        }
+
+        class Passenger {
+            constructor(floorIndex) {
+                this.floorIndex = floorIndex;
+                let dest = Math.floor(Math.random() * CONFIG.floorCount);
+                while (dest === floorIndex) dest = Math.floor(Math.random() * CONFIG.floorCount);
+                this.destFloor = dest;
+                this.patience = CONFIG.basePatience + (Math.random() * 10 - 5);
+                this.maxPatience = this.patience;
+                this.state = 'waiting';
+                this.mesh = createPassengerMesh();
+
+                const hue = Math.random() * 360;
+                const bodyMat = new THREE.MeshStandardMaterial({ color: `hsl(${hue}, 70%, 60%)`, roughness: 0.4 });
+                this.mesh.body.material = bodyMat;
+                this.mesh.head.material = bodyMat;
+
+                this.updateDestDisplay();
+                this.spawnPosition();
+                scene.add(this.mesh.group);
+            }
+
+            spawnPosition() {
+                const y = this.floorIndex * CONFIG.floorHeight + CONFIG.floorHeight / 2;
+                const x = -CONFIG.buildingWidth / 4 + (Math.random() - 0.5) * 2;
+                const z = -CONFIG.buildingDepth / 4 + (Math.random() - 0.5) * 2;
+                this.mesh.group.position.set(x, y, z);
+            }
+
+            updateDestDisplay() {
+                const labels = ['P0', 'P1', 'P2', 'P3'];
+                this.mesh.dctx.fillStyle = '#1a1a2e';
+                this.mesh.dctx.fillRect(0, 0, 32, 32);
+                this.mesh.dctx.fillStyle = '#4a90e2';
+                this.mesh.dctx.font = 'bold 18px sans-serif';
+                this.mesh.dctx.textAlign = 'center';
+                this.mesh.dctx.textBaseline = 'middle';
+                this.mesh.dctx.fillText(labels[this.destFloor], 16, 16);
+                this.mesh.destMat.map.needsUpdate = true;
+            }
+
+            update(dt) {
+                if (this.state === 'waiting') {
+                    this.patience -= dt;
+                    const pct = Math.max(0, this.patience / this.maxPatience);
+                    this.mesh.patienceFill.scale.x = pct;
+                    this.mesh.patienceFill.position.x = -0.44 * (1 - pct);
+                    this.mesh.patienceFill.material.color.setHSL(0.65 - pct * 0.5, 0.9, 0.55);
+                    if (this.patience <= 0) {
+                        this.state = 'lost';
+                        onPassengerLost(this);
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            remove() {
+                scene.remove(this.mesh.group);
+            }
+
+            getReward() {
+                return CONFIG.coinPerPassenger;
+            }
+        }
+
+        echo "Part 3 marker"
+
+        // ------------------------------------------------------------------
+        // LOGICA IMBARCO / SBARCO / SPAWN
+        // ------------------------------------------------------------------
+        let nextSpawn = 0;
+        function scheduleNextSpawn() {
+            nextSpawn = CONFIG.spawnIntervalMin + Math.random() * (CONFIG.spawnIntervalMax - CONFIG.spawnIntervalMin);
+        }
+        scheduleNextSpawn();
+
+        function spawnPassenger() {
+            const floorIndex = Math.floor(Math.random() * CONFIG.floorCount);
+            const p = new Passenger(floorIndex);
+            passengers.push(p);
+        }
+
+        function onElevatorArrived() {
+            const floor = elevatorState.currentFloor;
+
+            // 1) SBARCO: passeggeri a bordo la cui destinazione è questo piano
+            const toAlight = elevatorState.passengers.filter(p => p.destFloor === floor);
+            toAlight.forEach(p => {
+                p.state = 'done';
+                addMoney(p.getReward());
+                showFloatingText(`+${p.getReward()}€`, p.mesh.group.position);
+                p.remove();
+            });
+            elevatorState.passengers = elevatorState.passengers.filter(p => p.destFloor !== floor);
+
+            // 2) IMBARCO: passeggeri in attesa su questo piano (rispetta capienza)
+            const waitingHere = passengers.filter(p => p.state === 'waiting' && p.floorIndex === floor);
+            const freeSlots = CONFIG.elevatorCapacity - elevatorState.passengers.length;
+            const toBoard = waitingHere.slice(0, freeSlots);
+            toBoard.forEach(p => {
+                p.state = 'onboard';
+                // rimuovi dall'array globale di attesa (ora è a bordo)
+                const idx = passengers.indexOf(p);
+                if (idx > -1) passengers.splice(idx, 1);
+                elevatorState.passengers.push(p);
+                const slotIndex = elevatorState.passengers.length - 1;
+                const offsetX = ((slotIndex % 2) === 0) ? -0.5 : 0.5;
+                const offsetZ = Math.floor(slotIndex / 2) * 0.55 - 0.5;
+                p.mesh.group.position.set(
+                    elevatorGroup.position.x + offsetX,
+                    elevatorGroup.position.y + 0.9,
+                    elevatorGroup.position.z + offsetZ
+                );
+            });
+        }
+
+        function onPassengerLost(p) {
+            gameState.hearts = Math.max(0, gameState.hearts - 1);
+            updateHUD();
+            saveSave(gameState);
+            if (gameState.hearts <= 0) {
+                showGameOver();
+            }
+        }
+
+        function updateOnboardPassengers() {
+            elevatorState.passengers.forEach(p => {
+                const slotIndex = elevatorState.passengers.indexOf(p);
+                const offsetX = ((slotIndex % 2) === 0) ? -0.5 : 0.5;
+                const offsetZ = Math.floor(slotIndex / 2) * 0.55 - 0.5;
+                p.mesh.group.position.set(
+                    elevatorGroup.position.x + offsetX,
+                    elevatorGroup.position.y + 0.9,
+                    elevatorGroup.position.z + offsetZ
+                );
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // UI & HUD
+        // ------------------------------------------------------------------
+        const elMoney = document.getElementById('money-value');
+        const elHearts = document.getElementById('reputation-value');
+        const floorBtns = document.querySelectorAll('.floor-btn');
+        const gameOverEl = document.getElementById('gameover');
+        const finalScoreEl = document.getElementById('final-score');
+        const finalRecordEl = document.getElementById('final-record');
+        const restartBtn = document.getElementById('restart-btn');
+        const floatingEl = document.getElementById('floating-text');
+
+        function updateHUD() {
+            elMoney.textContent = gameState.money;
+            let heartsHtml = '';
+            for (let i = 0; i < CONFIG.initialHearts; i++) {
+                heartsHtml += i < gameState.hearts ? '❤' : '♡';
+            }
+            elHearts.innerHTML = heartsHtml;
+
+            floorBtns.forEach(btn => {
+                const f = parseInt(btn.dataset.floor, 10);
+                btn.classList.toggle('active', f === elevatorState.currentFloor && elevatorState.doorOpen);
+            });
+        }
+
+        function addMoney(amount) {
+            gameState.money += amount;
+            if (gameState.money > gameState.record) gameState.record = gameState.money;
+            updateHUD();
+            saveSave(gameState);
+        }
+
+        function showFloatingText(text, pos) {
+            const vector = pos ? pos.clone() : new THREE.Vector3(0, 0, 0);
+            vector.project(camera);
+            const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+            const y = (-(vector.y * 0.5) + 0.5) * window.innerHeight;
+            floatingEl.style.left = x + 'px';
+            floatingEl.style.top = y + 'px';
+            floatingEl.textContent = text;
+            floatingEl.style.opacity = 1;
+            floatingEl.style.transform = 'translateY(0) scale(1)';
+            floatingEl.style.animation = 'none';
+            floatingEl.offsetHeight;
+            floatingEl.style.animation = 'floatUp 1.2s ease-out forwards';
+        }
+
+        floorBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                setElevatorTarget(parseInt(btn.dataset.floor, 10));
+            });
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                setElevatorTarget(parseInt(btn.dataset.floor, 10));
+            }, { passive: false });
+        });
+
+        restartBtn.addEventListener('click', () => {
+            gameState = { money: 0, hearts: CONFIG.initialHearts, record: gameState.record };
+            saveSave(gameState);
+            updateHUD();
+            gameOverEl.classList.remove('visible');
+            passengers.forEach(p => p.remove());
+            passengers.length = 0;
+            elevatorState.passengers.length = 0;
+            elevatorState.currentFloor = 0;
+            elevatorState.targetFloor = 0;
+            elevatorState.isMoving = false;
+            elevatorState.doorOpen = false;
+            elevatorState.y = CONFIG.floorHeight / 2;
+            scheduleNextSpawn();
+        });
+
+        function showGameOver() {
+            finalScoreEl.textContent = `Monete guadagnate: ${gameState.money}`;
+            finalRecordEl.textContent = `Record: ${gameState.record}`;
+            gameOverEl.classList.add('visible');
+        }
+
+        // ------------------------------------------------------------------
+        // GAME LOOP
+        // ------------------------------------------------------------------
+        let lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const now = performance.now();
+            const dt = (now - lastTime) / 1000;
+            lastTime = now;
+
+            updateElevator(dt);
+            updateOnboardPassengers();
+
+            nextSpawn -= dt * 1000;
+            if (nextSpawn <= 0) {
+                spawnPassenger();
+                scheduleNextSpawn();
+            }
+
+            for (let i = passengers.length - 1; i >= 0; i--) {
+                const removed = passengers[i].update(dt);
+                if (removed && passengers[i].state === 'lost') {
+                    passengers.splice(i, 1);
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // ------------------------------------------------------------------
+        // AVVIO
+        // ------------------------------------------------------------------
+        updateHUD();
+        animate();
+
+    </script>
+</body>
+</html>
