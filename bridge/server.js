@@ -1,6 +1,6 @@
 const http = require('http');
 const WebSocket = require('ws');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const path = require('path');
 const { createGitHubTokenEnv, createSdkAgent } = require('./cline-sdk');
 
@@ -50,12 +50,13 @@ let serverState = {
 
 // GitHub REST API helper
 async function githubRequest(path, options = {}) {
-    if (!activeToken) {
+    const token = options.token || activeToken;
+    if (!token) {
         throw new Error('No GitHub token: set GITHUB_TOKEN env var or authenticate from the app');
     }
     const url = new URL(path, 'https://api.github.com');
     const headers = {
-        'Authorization': `Bearer ${activeToken}`,
+        'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -512,6 +513,100 @@ function startClineAuth(clientId) {
     });
 }
 
+function execFileAsync(file, args, options) {
+    return new Promise((resolve, reject) => {
+        execFile(file, args, options, (error, stdout, stderr) => {
+            if (error) {
+                error.stderr = stderr;
+                reject(error);
+                return;
+            }
+            resolve(stdout);
+        });
+    });
+}
+
+function parseGitStatus(output) {
+    const lines = output.split(/\r?\n/).filter(Boolean);
+    const branchLine = lines.find((line) => line.startsWith('## ')) || '';
+    const branchTracking = branchLine.slice(3);
+    return {
+        branch: branchTracking.split('...')[0] || 'HEAD',
+        tracking: branchTracking.includes('...') ? branchTracking.slice(branchTracking.indexOf('...') + 3) : '',
+        changes: lines.filter((line) => !line.startsWith('## '))
+    };
+}
+
+function isGitHubNotFound(error) {
+    return /GitHub API error 404:/.test(error.message || '');
+}
+
+async function getPagesStatus(clientId, owner, repo) {
+    const token = clientTokens.get(clientId);
+    const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pages`;
+    try {
+        const page = await githubRequest(repoPath, { token });
+        let lastBuild = null;
+        try {
+            lastBuild = await githubRequest(`${repoPath}/builds/latest`, { token });
+        } catch (error) {
+            if (!isGitHubNotFound(error)) throw error;
+        }
+        return {
+            enabled: true,
+            status: page.status || 'unknown',
+            url: page.html_url || '',
+            buildStatus: lastBuild?.status || '',
+            buildUpdatedAt: lastBuild?.updated_at || lastBuild?.created_at || ''
+        };
+    } catch (error) {
+        if (isGitHubNotFound(error)) {
+            return { enabled: false };
+        }
+        return { enabled: null, error: sanitizeErrorText(error.message) };
+    }
+}
+
+async function handleSourceControlRequest(clientId, payload = {}) {
+    const repository = typeof payload.repository === 'string' ? payload.repository.trim() : '';
+    const match = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(repository);
+    if (!match) {
+        sendTo(clientId, {
+            type: 'source_control_error',
+            payload: { repository, error: 'Repository must use the owner/repository format.' }
+        });
+        return;
+    }
+
+    try {
+        const [statusOutput, lastCommitAt, pages] = await Promise.all([
+            execFileAsync('git', ['status', '--short', '--branch', '--untracked-files=normal'], {
+                cwd: CLINE_CWD,
+                maxBuffer: 1024 * 1024
+            }),
+            execFileAsync('git', ['log', '-1', '--format=%cI'], {
+                cwd: CLINE_CWD,
+                maxBuffer: 64 * 1024
+            }),
+            getPagesStatus(clientId, match[1], match[2])
+        ]);
+        sendTo(clientId, {
+            type: 'source_control_result',
+            payload: {
+                repository,
+                git: { ...parseGitStatus(statusOutput), lastCommitAt: lastCommitAt.trim() },
+                pages,
+                checkedAt: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        sendTo(clientId, {
+            type: 'source_control_error',
+            payload: { repository, error: sanitizeErrorText(error.message) }
+        });
+    }
+}
+
 async function handleMessage(clientId, message) {
     switch (message.type) {
         case 'connect':
@@ -539,6 +634,11 @@ async function handleMessage(clientId, message) {
         case 'cline_auth_start':
             if (!requireAuth(clientId)) break;
             startClineAuth(clientId);
+            break;
+
+        case 'source_control_request':
+            if (!requireAuth(clientId)) break;
+            await handleSourceControlRequest(clientId, message.payload);
             break;
 
         case 'chat_stop':
@@ -1024,6 +1124,7 @@ module.exports = {
     formatClineError,
     getFreeClineModels,
     normalizeFreeClineModels,
+    parseGitStatus,
     fetchUser,
     handleMessage,
     toSdkMessages: require('./cline-sdk').toSdkMessages
