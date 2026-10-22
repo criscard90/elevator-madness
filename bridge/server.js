@@ -400,7 +400,7 @@ async function getFreeClineModels() {
     const providerModels = await fetchLiveProviderModels(
         'https://models.dev/api.json',
         fetch,
-        { includeClineCloudModels: true }
+        { includeClineCloudModels: false }
     );
     const models = normalizeFreeClineModels(providerModels.cline || {});
     if (!models.length) throw new Error('Cline returned no free models in its current catalog.');
@@ -410,7 +410,6 @@ async function getFreeClineModels() {
 
 function normalizeFreeClineModels(providerModels) {
     return Object.entries(providerModels)
-        .filter(([id]) => id.startsWith('cline-free/'))
         .map(([id, model]) => ({
             id,
             name: typeof model.name === 'string' && model.name.trim() ? model.name : id,
