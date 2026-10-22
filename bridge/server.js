@@ -812,6 +812,36 @@ function spawnCline(args, options) {
     return spawn(CLINE_BIN, commandArgs, options);
 }
 
+function formatToolActivity(toolCall) {
+    const name = typeof toolCall.toolName === 'string' ? toolCall.toolName : 'agent tool';
+    const input = toolCall.input && typeof toolCall.input === 'object'
+        ? toolCall.input
+        : {};
+    const target = [input.path, input.filePath, input.file]
+        .find((value) => typeof value === 'string' && value.trim());
+    const suffix = target ? `: ${sanitizeErrorText(target)}` : '';
+    const labels = {
+        read_file: `Reading file${suffix}`,
+        write_file: `Creating or editing file${suffix}`,
+        search_codebase: `Searching code${input.query ? `: ${sanitizeErrorText(input.query)}` : ''}`,
+        run_command: `Running command${input.command ? `: ${sanitizeErrorText(input.command)}` : ''}`
+    };
+    return labels[name] || `${sanitizeErrorText(name.replace(/[_-]+/g, ' '))}${suffix}`;
+}
+
+function sendAgentToolActivity(clientId, toolCall, status, isError = false) {
+    if (!toolCall || typeof toolCall.toolCallId !== 'string') return;
+    sendTo(clientId, {
+        type: 'agent_tool_activity',
+        payload: {
+            id: toolCall.toolCallId,
+            text: formatToolActivity(toolCall),
+            status,
+            isError
+        }
+    });
+}
+
 async function runClineSdk(clientId, conversationId, userText, config) {
     stopCline(clientId);
 
@@ -844,6 +874,25 @@ async function runClineSdk(clientId, conversationId, userText, config) {
             if (event.type === 'assistant-text-delta' && event.text) {
                 partials.set(clientId, (partials.get(clientId) || '') + event.text);
                 sendTo(clientId, { type: 'chat_stream', payload: { text: event.text } });
+            } else if (
+                event.type === 'assistant-reasoning-delta' &&
+                event.text &&
+                !event.redacted
+            ) {
+                sendTo(clientId, {
+                    type: 'agent_reasoning_delta',
+                    payload: { text: event.text }
+                });
+            } else if (event.type === 'tool-started') {
+                sendAgentToolActivity(clientId, event.toolCall, 'started');
+            } else if (event.type === 'tool-finished') {
+                const resultPart = event.message.content.find((part) => part.type === 'tool-result');
+                sendAgentToolActivity(
+                    clientId,
+                    event.toolCall,
+                    resultPart?.isError ? 'failed' : 'completed',
+                    resultPart?.isError === true
+                );
             }
         });
 
@@ -1029,12 +1078,27 @@ function runClineCli(clientId, conversationId, userText, config) {
 function handleClineEvent(clientId, evt) {
     if (evt.type !== 'agent_event' || !evt.event) return;
     const e = evt.event;
-    if (e.type === 'content_start' || e.type === 'content_update') {
+    if (e.type === 'content_start' || e.type === 'content_update' || e.type === 'assistant-text-delta') {
         const delta = extractDelta(e);
         if (delta) {
             partials.set(clientId, (partials.get(clientId) || '') + delta);
             sendTo(clientId, { type: 'chat_stream', payload: { text: delta } });
         }
+    } else if (
+        (e.type === 'assistant-reasoning-delta' || e.type === 'reasoning-delta') &&
+        !e.redacted
+    ) {
+        const delta = extractDelta(e);
+        if (delta) sendTo(clientId, { type: 'agent_reasoning_delta', payload: { text: delta } });
+    } else if (e.type === 'tool-started' || e.type === 'tool-start') {
+        sendAgentToolActivity(clientId, e.toolCall || e, 'started');
+    } else if (e.type === 'tool-finished' || e.type === 'tool-finish') {
+        sendAgentToolActivity(
+            clientId,
+            e.toolCall || e,
+            e.isError ? 'failed' : 'completed',
+            e.isError === true
+        );
     } else if (e.type === 'error') {
         const error = formatClineError(e);
         console.error('Cline agent error:', error);
@@ -1122,6 +1186,7 @@ module.exports = {
     conversationKey,
     extractDelta,
     formatClineError,
+    formatToolActivity,
     getFreeClineModels,
     normalizeFreeClineModels,
     parseGitStatus,
